@@ -1,0 +1,83 @@
+# Two gates behind one load balancer, plus two backend services.
+#
+#   docker compose up --build
+#   ws://127.0.0.1:7080/ws        <- clients connect here
+#   http://127.0.0.1:8001/stats   <- gate-1 ops surface
+#
+# Scaling out is adding another gate service (or `--scale`) with its own
+# GATE_ID; no client-side change and no sticky sessions required.
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    ports:
+      # 6380 on the host so this does not clash with a locally installed redis.
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gate-1: &gate
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment: &gate-env
+      GATE_ID: gate-1
+      ADVERTISE_ADDR: gate-1:7000
+      WS_PORT: 7000
+      ADMIN_PORT: 8000
+      ADMIN_HOST: 0.0.0.0
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: dev-secret-change-me
+      WS_TRUST_PROXY: "true"
+      LOG_LEVEL: info
+      NODE_ENV: production
+    ports:
+      - "7001:7000"
+      - "8001:8000"
+
+  gate-2:
+    <<: *gate
+    environment:
+      <<: *gate-env
+      GATE_ID: gate-2
+      ADVERTISE_ADDR: gate-2:7000
+    ports:
+      - "7002:7000"
+      - "8002:8000"
+
+  game:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/tools/mockBackend.js", "--service", "game"]
+    environment:
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+    # Backend services have no HTTP port; the image's probe does not apply.
+    healthcheck:
+      disable: true
+
+  chat:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/tools/mockBackend.js", "--service", "chat"]
+    environment:
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+    healthcheck:
+      disable: true
+
+  lb:
+    image: nginx:1.27-alpine
+    depends_on: [gate-1, gate-2]
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "7080:80"

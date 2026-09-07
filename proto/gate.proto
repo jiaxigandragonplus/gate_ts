@@ -1,0 +1,141 @@
+// Client <-> gate wire protocol, protobuf flavour.
+//
+// This describes the ENVELOPE only. The game payload (`d`) is `bytes`: the
+// gate never parses it, exactly as with the JSON codec, so a service and its
+// clients own their own schema and can evolve it without touching the gate.
+//
+// Source of truth for src/protocol/pb/descriptor.ts - regenerate with
+// `npm run proto:gen` after editing this file (a unit test fails on drift).
+syntax = "proto3";
+
+package gate.v1;
+
+// ---------------------------------------------------------------- client ---
+
+// The oneof tag doubles as the packet type, so no separate type field is
+// needed. Tags 1-7 all fit in a single byte.
+message ClientEnvelope {
+  oneof body {
+    Auth auth = 1;
+    Resume resume = 2;
+    Heartbeat heartbeat = 3;
+    Request request = 4;
+    Notify notify = 5;
+  }
+}
+
+message Auth {
+  string token = 1;
+  string device = 2;
+}
+
+message Resume {
+  string sid = 1;
+  string rt = 2;
+  // Highest downstream seq the client has processed.
+  uint64 ack = 3;
+}
+
+message Heartbeat {
+  // 0 means "nothing received yet".
+  uint64 ack = 1;
+}
+
+message Request {
+  // Must be >= 1; 0 is reserved for "no request".
+  uint32 id = 1;
+  string cmd = 2;
+  bytes d = 3;
+  // 0 means the client opted out of upstream dedup.
+  uint64 cseq = 4;
+  // Set when `d` holds UTF-8 JSON instead of an opaque game message, which
+  // happens when a JSON-payload service answers a protobuf client.
+  bool d_json = 5;
+}
+
+message Notify {
+  string cmd = 1;
+  bytes d = 2;
+  uint64 cseq = 3;
+  bool d_json = 4;
+}
+
+// ---------------------------------------------------------------- server ---
+
+message ServerEnvelope {
+  oneof body {
+    AuthAck auth_ack = 1;
+    ResumeAck resume_ack = 2;
+    HeartbeatAck heartbeat_ack = 3;
+    Response response = 4;
+    Push push = 5;
+    Kick kick = 6;
+    Error error = 7;
+  }
+}
+
+message AuthAck {
+  string uid = 1;
+  string sid = 2;
+  // Resume credential. Rotated on every successful resume.
+  string rt = 3;
+  int64 ts = 4;
+  // Resume window, ms.
+  uint32 rw = 5;
+  // Suggested heartbeat interval, ms.
+  uint32 hb = 6;
+}
+
+message ResumeAck {
+  string uid = 1;
+  string sid = 2;
+  int64 ts = 3;
+  // Number of packets about to be replayed.
+  uint32 replay = 4;
+  // Highest upstream cseq the gate accepted; resend anything above it.
+  uint64 cack = 5;
+  // Downstream seq baseline. Only meaningful with `resync`.
+  uint64 seq = 6;
+  string rt = 7;
+  uint32 rw = 8;
+  uint32 hb = 9;
+  // Session recovered on a different gate: identity kept, replay buffer lost.
+  bool resync = 10;
+  // Address of the gate holding the replay buffer.
+  string redirect = 11;
+}
+
+message HeartbeatAck {
+  int64 ts = 1;
+}
+
+message Response {
+  uint32 id = 1;
+  uint64 seq = 2;
+  bytes d = 3;
+  // 0 == ErrorCode.Ok == success.
+  uint32 e = 4;
+  string m = 5;
+  bool d_json = 6;
+}
+
+message Push {
+  uint64 seq = 1;
+  string cmd = 2;
+  bytes d = 3;
+  bool d_json = 4;
+}
+
+message Kick {
+  string reason = 1;
+  string m = 2;
+  // The session survives: reconnect and Resume rather than re-authenticating.
+  bool resumable = 3;
+}
+
+message Error {
+  uint32 e = 1;
+  string m = 2;
+  // 0 when the error is not attributable to a request.
+  uint32 id = 3;
+}

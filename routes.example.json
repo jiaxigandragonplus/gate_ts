@@ -1,0 +1,8 @@
+{
+  "routes": [
+    { "prefix": "game.", "service": "game" },
+    { "prefix": "chat.", "service": "chat" },
+    { "cmd": "game.slow", "service": "game", "timeoutMs": 20000 },
+    { "prefix": "rank.", "service": "rank", "sticky": false }
+  ]
+}
