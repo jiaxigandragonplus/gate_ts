@@ -15,8 +15,8 @@
 | 5. 维护连接 + 按类型转发 | 路由表按 `cmd` 前缀/精确匹配映射到服务，玩家对后端节点粘性绑定 |
 | 6. 断线重连 | 会话在掉线后保留（默认 60s），重连后按序列号重放丢失的下行包，上行包去重防重复执行 |
 | 7. 顶号踢人 | Redis Lua 原子抢占账号所有权，跨 gate 精确踢掉旧会话 |
-| 8. 允许用 Redis | Redis 承担会话注册表 + 节点发现 + 集群消息总线（pub/sub），无其他中间件 |
-| 9. 框架自选 | 自研网关骨架 + `ws` / `ioredis` / `jsonwebtoken` / `pino` / `protobufjs`，依赖 6 个 |
+| 8. 允许用 Redis | Redis 承担会话注册表 + 节点发现（状态层）；服务器间消息走 NATS，也可切回 Redis pub/sub 做到零额外中间件 |
+| 9. 框架自选 | 自研网关骨架 + `ws` / `ioredis` / `@nats-io/transport-node` / `jsonwebtoken` / `pino` / `protobufjs`，依赖 7 个 |
 
 ## 架构
 
@@ -45,19 +45,28 @@
            └──────────┘      └──────────┘
 ```
 
-Redis 承担三件事：
+职责分成**状态**和**消息**两件事，分别由 Redis 和 NATS 承担 —— 两者混用是集群最难推理的来源：
+
+**Redis 管状态**
 
 1. **会话注册表** —— `sess:<uid>` 记录"这个账号当前由哪个 gate 的哪个会话持有"，是顶号判定的唯一依据；
-2. **节点发现** —— gate 与后端服务各自心跳注册，转发时只挑活着的节点；
-3. **消息总线** —— gate 订阅 `node:<gateId>`（自己的收件箱）和 `node:all`（全局广播）两个频道；上行按服务节点定向 publish，扇出为零。
+2. **节点发现** —— gate 与后端服务各自心跳注册，转发时只挑活着的节点。
+
+**NATS 管消息**（`CLUSTER_TRANSPORT=nats`，默认）
+
+3. gate 订阅 `<p>.node.<gateId>`（自己的收件箱）和 `<p>.broadcast`（全局广播）；上行按服务节点的 subject 定向 publish，扇出为零。所有节点只连总线，**没有任何节点需要知道另一个节点的地址**，所以 N 类节点任意互通时连接拓扑仍是 O(N)。
+
+传输是可换的（`CLUSTER_TRANSPORT=redis` 退回纯 Redis pub/sub，零额外中间件）。两种实现跑**同一套集成测试**，行为等价性是被测试保证的，不是被文档声称的。
 
 ## 快速开始
 
 ```bash
 npm install
 cp .env.example .env          # 至少改掉 JWT_SECRET
-docker compose up -d redis    # 或用你本地已有的 redis
+docker compose up -d redis nats   # 或用你本地已有的
 ```
+
+（不想装 NATS 也行：`CLUSTER_TRANSPORT=redis` 就只需要 Redis。）
 
 四个终端分别起：
 
@@ -285,6 +294,34 @@ const reply = await client.request<Buffer>('game.move', MoveMsg.encode(move).fin
 
 代码基于 `ws`（Node）；浏览器端只需把 WebSocket 构造函数换掉，协议逻辑不变。
 
+## 服务器间通信
+
+消息走 NATS，subject 层级如下（实现见 [framework/nats/](src/framework/nats/)）：
+
+```
+<p>.node.<gateId>          某个 gate 的收件箱（响应、定向推送、踢人）
+<p>.broadcast              所有 gate
+<p>.svc.<service>.<nodeId> 某个服务节点的收件箱
+<p>.svc.<service>.q        无状态工作的 queue group subject（预留）
+```
+
+刻意做成层级的：`<p>.node.>` 和 `<p>.svc.game.>` 因此可以直接用于监控和 NATS 账号权限控制，扁平命名就做不到。广播 subject **不在 `node.` 命名空间下**——如果叫 `node.all`，那它恰好就是某个 id 为 `all` 的 gate 的收件箱，发给那个 gate 的定向消息会扇出到全集群。
+
+两个坑已经在代码里处理掉了：
+
+- **subject token 不能含 `.` `*` `>` 和空格**。默认 `GATE_ID` 是 `${hostname()}-${port}`，而主机名经常带点（`MacBook-Pro.local`），所以节点 id 在**产生的地方**就归一化一次（`normalizeNodeId`），保证同一个值在 Redis key、subject、日志、指标标签里都是同一个。
+- **节点 id 来自注册表，是外部输入**。一个 id 为 `>` 的节点会把定向 publish 变成全集群扇出，所以构造 subject 时会校验并拒绝（`assertSubjectToken`）—— 这是防 subject 注入，不只是防笔误。
+
+### 传输不匹配会显式报错
+
+gate 和服务用了不同的 `CLUSTER_TRANSPORT` 是个很难查的故障：节点在注册表里活得好好的，请求却全部超时。所以服务节点会在心跳里上报自己的传输类型，gate 发现不一致时**把该节点排除并打错误日志**，客户端立刻收到 `ServiceUnavailable` 而不是等 8 秒超时。
+
+### 投递分级
+
+当前实现是 **core NATS**（at-most-once，fire-and-forget），适合帧同步、位置广播、聊天这类丢了无所谓的流量。
+
+**邮件、发奖、跨服交易这类不能丢的消息还没有投递保证** —— 需要的话要接 JetStream（持久化流 + ack + 去重）。这部分我没做，因为 stream 的保留策略、副本数、去重窗口都取决于你们的部署形态，得先定下来再写。`NatsClient` 已经留好了位置（连接和 subject 都是复用的），加的是一个 `JetStreamBus`。
+
 ## 运维接口
 
 管理端口（默认 `WS_PORT + 1000`）只该暴露在内网：
@@ -293,8 +330,8 @@ const reply = await client.request<Buffer>('game.move', MoveMsg.encode(move).fin
 | --- | --- |
 | `GET /healthz` | 存活探针 |
 | `GET /readyz` | 就绪探针（Redis 可用且未在停机中） |
-| `GET /metrics` | Prometheus 文本格式，含在线会话、认证/重连/顶号计数、上行延迟 |
-| `GET /stats` | 本节点聚合状态 JSON |
+| `GET /metrics` | Prometheus 文本格式，含在线会话、认证/重连/顶号计数、上行延迟、传输层计数器 |
+| `GET /stats` | 本节点聚合状态 JSON，含 `transport` 和传输层计数器 |
 | `POST /admin/kick` | `{"uid":"...","reason":"admin"}`，集群范围踢人（自动转发到所属 gate） |
 | `POST /admin/push` | `{"uid":"...","cmd":"...","d":{}}`，运维/联调推送 |
 | `POST /admin/drain` | 触发优雅停机 |
@@ -315,6 +352,9 @@ const reply = await client.request<Buffer>('game.move', MoveMsg.encode(move).fin
 | `SESSION_CROSS_GATE_RESUME` | true | 允许换 gate 重连；L4 负载均衡下必须开 |
 | `LIMIT_MSGS_PER_SEC` / `LIMIT_BURST` | 30 / 60 | 单连接上行限流（令牌桶） |
 | `WS_TRUST_PROXY` | false | 从 `X-Forwarded-For` 取客户端 IP，**仅在自己的 LB 后开启** |
+| `CLUSTER_TRANSPORT` | `nats` | 服务器间消息走 `nats` 还是 `redis`。**所有 gate 和所有后端服务必须一致** |
+| `NATS_SERVERS` | `nats://127.0.0.1:4222` | 逗号分隔的服务器列表 |
+| `NATS_SUBJECT_PREFIX` | `gate` | subject 层级的根，不能含 `.` `*` `>` 和空格 |
 | `WS_CODECS` | `json,protobuf` | 本节点提供的编码；客户端只能从这里面选 |
 | `WS_DEFAULT_CODEC` | 列表第一个 | 客户端没表态时用哪个 |
 | `BACKEND_REQUEST_TIMEOUT_MS` | 8000 | 上行请求超时 |
@@ -336,6 +376,8 @@ npm run load -- --clients 150 --rate 6 --seconds 10 --codec pb   --admin http://
 
 [test/integration/protobuf.test.ts](test/integration/protobuf.test.ts) 单独覆盖编码：子协议协商、JSON 与 protobuf 客户端同 gate 共存、二进制载荷双向原样透传、跨编码的载荷转换、广播同时到达两种客户端、protobuf 会话的重连重放、只开 JSON 的节点拒绝 protobuf 客户端。编码本身还有 [test/unit/codec.test.ts](test/unit/codec.test.ts) 的一致性测试——同一张包用例表跑过**每一种编码**的双向往返，另有未知字段前向兼容和描述符漂移检查。
 
+集群测试**整套跑两遍**（redis 和 nats 各一遍，共 52 个），传输的行为等价性由此保证；[test/integration/transport.test.ts](test/integration/transport.test.ts) 单独验证传输不匹配会快速报错而不是超时。NATS 起不来时对应那遍自动跳过。
+
 [test/unit/moduleBoundaries.test.ts](test/unit/moduleBoundaries.test.ts) 守住上面那条分层：共享模块不许 import `src/gate/`，网关不许 import `sdk/`，`protocol/` 保持零依赖。目录划分靠测试维持，不靠 review 记性。
 
 本机参考数据（M 系列笔记本，2 gate + 2 game 节点 + Redis 全在同一台）：300 并发连接、1200 req/s 目标压力下实测 1071 req/s，p50 3ms / p95 6ms / p99 8ms，零失败零重连。
@@ -351,10 +393,11 @@ npm run load -- --clients 150 --rate 6 --seconds 10 --codec pb   --admin http://
 
 - **负载均衡**：nginx 配置见 [deploy/nginx.conf](deploy/nginx.conf)。用 `least_conn` 即可，不要 `ip_hash`——跨节点重连本来就支持，粘滞只会让流量倾斜。`proxy_read_timeout` 要远大于心跳间隔。
 - **Redis**：会话注册表丢了等于全员掉线，生产上用主从 + Sentinel，并设 `maxmemory-policy noeviction`（这些 key 不能被淘汰）。当前实现假设单实例/主从，未适配 Cluster 的跨 slot 限制。
+- **NATS**：三节点集群即可（`--cluster` + `--routes`，没有 Kafka 那套分区 rebalance 的仪式）。要盯的指标是 `gate_transport_slow_consumers`（有值就意味着消息在被丢）和 `gate_transport_reconnects`；NATS 自己的 `/varz` `/connz` `/subsz` 也要接监控。**不要用通配符订阅数据面** —— 线上忘记摘掉的调试订阅是经典事故源。默认 `max_payload` 是 1MB，大包对吞吐的伤害不成比例。
 - **停机顺序**：`SIGTERM` → 停止接受新连接 → 从节点注册表摘除 → 等在途回包 → 发 `Kick{resumable}` → 释放会话。把 LB 的摘除时间留够（`SHUTDOWN_GRACE_MS`）。
 - **JWT**：网关只验签不签发。建议 token TTL 短（分钟级）+ 非对称密钥；网关不校验吊销列表，需要的话在 `JwtVerifier` 后加一次 Redis 黑名单查询（`jti` 已解析出来）。
 - **编码选择**：内网带宽不紧张、要方便抓包排查就用 JSON；移动端弱网、包频高（帧同步、位置同步）用 protobuf，并把游戏载荷也做成 protobuf——那样省的不只是信封。两者可以同时开着灰度迁移。
-- **可以再加的东西**：msgpack / flatbuffers（`Codec` 是可替换接口，加一个实现 + 一个子协议名即可，一致性测试会自动覆盖它）、按 `cmd` 的细粒度限流、Redis Streams 替代 pub/sub 以获得投递保证、gate 间直连 gRPC 替代 Redis 总线（延迟更低）。
+- **可以再加的东西**：JetStream（给必须不丢的消息做投递保证）、把内部 envelope 也换成 protobuf（现在内部是 JSON，二进制载荷要 base64，等于把客户端省下的字节又付回去）、msgpack / flatbuffers（`Codec` 是可替换接口，加一个实现 + 一个子协议名即可，一致性测试会自动覆盖它）、按 `cmd` 的细粒度限流、Redis Streams 替代 pub/sub 以获得投递保证、gate 间直连 gRPC 替代 Redis 总线（延迟更低）。
 
 ## 目录结构
 
@@ -367,7 +410,9 @@ src/
     serviceNode.ts 后端服务接入：注册 handler、推送、组播、踢人
     protocol/      包定义、编解码（JSON / protobuf）、协商、集群内部消息格式
       pb/          由 gate.proto 生成的描述符（提交进仓库，运行时不读文件）
-    redis/         连接池、key 布局、会话注册表(Lua)、节点注册表、消息总线
+    transport/     ClusterBus / ServiceBus 接口 + 按配置选实现的工厂
+    nats/          NATS 传输：连接管理、subject 命名、两个方向的 bus
+    redis/         状态层（会话注册表 Lua、节点注册表）+ Redis pub/sub 传输
     util/          日志、id、限流
   gate/            ── 网关：基于 framework 的一个服务 ────
     index.ts       对外出口（Gate、loadConfig）

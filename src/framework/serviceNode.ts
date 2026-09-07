@@ -3,11 +3,14 @@ import { RedisPool } from './redis/client';
 import { Keys } from './redis/keys';
 import { NodeRegistry } from './redis/nodeRegistry';
 import { ErrorCode } from './protocol/packet';
+import { createServiceBus, type ServiceBus, type TransportKind } from './transport';
+import { normalizeNodeId } from './nats/subjects';
 import type {
   DownstreamMessage,
   UpRequest,
   UpNotify,
   UpSessionEvent,
+  UpstreamMessage,
   UpstreamMeta,
 } from './protocol/internal';
 import { fromInternal, isBytes, toInternal } from './protocol/payload';
@@ -24,6 +27,13 @@ export interface ServiceNodeOptions {
   nodeTtlMs?: number;
   /** Reported to gates for load-aware routing; defaults to session count. */
   load?: () => number;
+  /**
+   * Server-to-server transport. Defaults to CLUSTER_TRANSPORT, then 'nats'.
+   * Redis is still used for cluster state either way.
+   */
+  transport?: TransportKind;
+  natsServers?: string[];
+  subjectPrefix?: string;
 }
 
 export interface RequestContext {
@@ -90,6 +100,7 @@ export class ServiceNode {
   private readonly pool: RedisPool;
   private readonly keys: Keys;
   private readonly registry: NodeRegistry;
+  private readonly bus: ServiceBus;
   private readonly handlers = new Map<string, RequestHandler>();
   private readonly prefixHandlers: Array<{ prefix: string; handler: RequestHandler }> = [];
   private readonly opts: {
@@ -105,8 +116,12 @@ export class ServiceNode {
   private started = false;
 
   constructor(options: ServiceNodeOptions) {
-    this.service = options.service;
-    this.nodeId = options.nodeId ?? `${options.service}-${hostname()}-${shortId(4)}`;
+    this.service = normalizeNodeId(options.service);
+    // Normalized once: the same id is used as a redis field, a NATS subject
+    // token and a log label, and hostnames routinely contain dots.
+    this.nodeId = normalizeNodeId(
+      options.nodeId ?? `${options.service}-${hostname()}-${shortId(4)}`,
+    );
     this.opts = {
       service: options.service,
       redisUrl: options.redisUrl ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
@@ -116,9 +131,38 @@ export class ServiceNode {
       ...(options.load ? { load: options.load } : {}),
     };
     this.log = logger.child({ mod: 'service', service: this.service, node: this.nodeId });
+    // Redis stays the state layer (session ownership, node registry) whatever
+    // transport carries the messages.
     this.pool = new RedisPool(this.opts.redisUrl);
     this.keys = new Keys(this.opts.keyPrefix);
     this.registry = new NodeRegistry(this.pool.cmd, this.keys, this.opts.nodeTtlMs);
+
+    const transport =
+      options.transport ?? ((process.env.CLUSTER_TRANSPORT as TransportKind | undefined) || 'nats');
+    if (transport !== 'redis' && transport !== 'nats') {
+      throw new Error(`unknown transport "${transport}" (expected "redis" or "nats")`);
+    }
+    this.bus = createServiceBus(
+      {
+        kind: transport,
+        redis: { pool: this.pool, keys: this.keys },
+        nats: {
+          subjectPrefix:
+            options.subjectPrefix ?? process.env.NATS_SUBJECT_PREFIX ?? 'gate',
+          options: {
+            servers:
+              options.natsServers ??
+              (process.env.NATS_SERVERS ?? 'nats://127.0.0.1:4222')
+                .split(',')
+                .map((v) => v.trim())
+                .filter(Boolean),
+            name: this.nodeId,
+          },
+        },
+      },
+      this.service,
+      this.nodeId,
+    );
   }
 
   /** Register a handler. `cmd` ending in `.` or `*` matches by prefix. */
@@ -141,12 +185,9 @@ export class ServiceNode {
     if (this.started) throw new Error('service node already started');
     this.started = true;
     await this.pool.connect();
-
-    const channel = this.keys.serviceChannel(this.service, this.nodeId);
-    this.pool.sub.on('message', (_ch: string, frame: string) => {
-      void this.dispatch(frame);
+    await this.bus.start((msg: UpstreamMessage) => {
+      void this.dispatch(msg);
     });
-    await this.pool.sub.subscribe(channel);
 
     await this.heartbeat();
     this.heartbeatTimer = setInterval(() => {
@@ -154,7 +195,10 @@ export class ServiceNode {
     }, this.opts.heartbeatMs);
     this.heartbeatTimer.unref();
 
-    this.log.info({ channel, commands: [...this.handlers.keys()] }, 'service node ready');
+    this.log.info(
+      { transport: this.bus.kind, commands: [...this.handlers.keys()] },
+      'service node ready',
+    );
   }
 
   private async heartbeat(): Promise<void> {
@@ -164,21 +208,16 @@ export class ServiceNode {
         addr: `${hostname()}:${process.pid}`,
         load: this.opts.load ? this.opts.load() : this.liveSessions.size,
         ts: Date.now(),
+        // Advertised so a gate on a different transport can say so out loud
+        // instead of timing out on every request.
+        meta: { transport: this.bus.kind },
       });
     } catch (err) {
       this.log.warn({ err: (err as Error).message }, 'heartbeat failed');
     }
   }
 
-  private async dispatch(raw: string): Promise<void> {
-    let msg: UpRequest | UpNotify | UpSessionEvent;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      this.log.warn('dropping malformed upstream message');
-      return;
-    }
-
+  private async dispatch(msg: UpRequest | UpNotify | UpSessionEvent): Promise<void> {
     if (msg.k === 'session') {
       if (msg.ev === 'online' || msg.ev === 'resumed') this.liveSessions.add(msg.sid);
       if (msg.ev === 'offline') this.liveSessions.delete(msg.sid);
@@ -309,11 +348,11 @@ export class ServiceNode {
   }
 
   private async publishToGate(gate: string, msg: DownstreamMessage): Promise<void> {
-    await this.pool.pub.publish(this.keys.nodeChannel(gate), JSON.stringify(msg));
+    await this.bus.publishToGate(gate, msg);
   }
 
   private async publishToAllGates(msg: DownstreamMessage): Promise<void> {
-    await this.pool.pub.publish(this.keys.allNodesChannel(), JSON.stringify(msg));
+    await this.bus.publishToAllGates(msg);
   }
 
   async stop(): Promise<void> {
@@ -321,7 +360,7 @@ export class ServiceNode {
     this.started = false;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     await this.registry.unregisterService(this.service, this.nodeId).catch(() => undefined);
-    await this.pool.sub.unsubscribe().catch(() => undefined);
+    await this.bus.stop().catch(() => undefined);
     await this.pool.close();
     this.log.info('service node stopped');
   }

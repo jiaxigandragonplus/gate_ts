@@ -1,4 +1,5 @@
-# Two gates behind one load balancer, plus two backend services.
+# Two gates behind one load balancer, two backend services, redis for cluster
+# state and nats for server-to-server messaging.
 #
 #   docker compose up --build
 #   ws://127.0.0.1:7080/ws        <- clients connect here
@@ -19,10 +20,25 @@ services:
       timeout: 3s
       retries: 5
 
+  nats:
+    image: nats:2-alpine
+    command: ["--http_port", "8222"]
+    ports:
+      - "4222:4222"
+      # monitoring: http://127.0.0.1:8222/varz , /connz , /subsz
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   gate-1: &gate
     build: .
     depends_on:
       redis:
+        condition: service_healthy
+      nats:
         condition: service_healthy
     environment: &gate-env
       GATE_ID: gate-1
@@ -31,6 +47,8 @@ services:
       ADMIN_PORT: 8000
       ADMIN_HOST: 0.0.0.0
       REDIS_URL: redis://redis:6379
+      CLUSTER_TRANSPORT: nats
+      NATS_SERVERS: nats://nats:4222
       JWT_SECRET: dev-secret-change-me
       WS_TRUST_PROXY: "true"
       LOG_LEVEL: info
@@ -54,9 +72,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      nats:
+        condition: service_healthy
     command: ["node", "dist/tools/mockBackend.js", "--service", "game"]
     environment:
       REDIS_URL: redis://redis:6379
+      CLUSTER_TRANSPORT: nats
+      NATS_SERVERS: nats://nats:4222
       LOG_LEVEL: info
     # Backend services have no HTTP port; the image's probe does not apply.
     healthcheck:
@@ -67,9 +89,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      nats:
+        condition: service_healthy
     command: ["node", "dist/tools/mockBackend.js", "--service", "chat"]
     environment:
       REDIS_URL: redis://redis:6379
+      CLUSTER_TRANSPORT: nats
+      NATS_SERVERS: nats://nats:4222
       LOG_LEVEL: info
     healthcheck:
       disable: true

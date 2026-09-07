@@ -9,7 +9,7 @@
  *   <p>:svc:<service>:nodes   hash    nodeId -> JSON NodeInfo
  *   <p>:bind:<uid>:<service>  string  nodeId              sticky backend pinning
  *   <p>:node:<gateId>         channel inbound messages for one gate
- *   <p>:node:all              channel inbound messages for every gate
+ *   <p>:broadcast             channel inbound messages for every gate
  *   <p>:svc:<service>:<node>  channel inbound messages for one service node
  */
 export class Keys {
@@ -43,8 +43,13 @@ export class Keys {
     return `${this.p}:node:${gateId}`;
   }
 
+  /**
+   * Outside the `node:` namespace on purpose - as `node:all` it would be the
+   * inbox of a gate whose id is "all", whose targeted messages would then
+   * reach every gate.
+   */
   allNodesChannel(): string {
-    return `${this.p}:node:all`;
+    return `${this.p}:broadcast`;
   }
 
   serviceChannel(service: string, nodeId: string): string {

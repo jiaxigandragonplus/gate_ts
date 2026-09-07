@@ -195,11 +195,21 @@ proto3 没有字段存在性，所以下列默认值一律按"缺省"处理：
 
 ## 集群内部消息
 
-gate ↔ 后端服务，同样走 Redis pub/sub，格式见 [src/framework/protocol/internal.ts](../src/framework/protocol/internal.ts)。
+gate ↔ 后端服务，格式见 [src/framework/protocol/internal.ts](../src/framework/protocol/internal.ts)。承载它的传输由 `CLUSTER_TRANSPORT` 决定（`nats` 默认，或 `redis` pub/sub），两者的消息格式完全相同，所以同一套集成测试能跑两遍。
 
 集群内部一直是 JSON（编码只是客户端与网关之间的事）。载荷走两个互斥字段：`d` 放 JSON 载荷，`db` 放不透明字节的 base64。别直接读这两个字段，用 [src/framework/protocol/payload.ts](../src/framework/protocol/payload.ts) 的 `toInternal` / `fromInternal`；`ServiceNode` 已经帮你分好了 `ctx.payload`（JSON）和 `ctx.payloadBytes`（Buffer）。
 
-上行 `<prefix>:svc:<service>:<nodeId>`：
+寻址（NATS subject / Redis 频道，两者一一对应）：
+
+| 用途 | NATS subject | Redis channel |
+| --- | --- | --- |
+| 某个 gate 的收件箱 | `<p>.node.<gateId>` | `<p>:node:<gateId>` |
+| 所有 gate | `<p>.broadcast` | `<p>:broadcast` |
+| 某个服务节点的收件箱 | `<p>.svc.<service>.<nodeId>` | `<p>:svc:<service>:<nodeId>` |
+
+广播不在 `node` 命名空间下：否则它就是某个 id 为 `all` 的 gate 的收件箱。NATS 的 subject token 还不能含 `.` `*` `>` 和空格，节点 id 在产生处归一化、在构造 subject 时校验（防 subject 注入）。
+
+上行到服务节点：
 
 | `k` | 说明 |
 | --- | --- |

@@ -12,7 +12,15 @@ import { ServiceNode } from '../../src/framework/serviceNode';
 import { SUBPROTOCOLS } from '../../src/framework/protocol/codecs';
 import { protobufCodec } from '../../src/framework/protocol/protobufCodec';
 import { PacketType } from '../../src/framework/protocol/packet';
-import { JWT_SECRET, REDIS_URL, flushPrefix, sleep, startGate, waitFor } from '../helpers/testGate';
+import {
+  JWT_SECRET,
+  REDIS_URL,
+  flushPrefix,
+  sleep,
+  startGate,
+  transportsUnderTest,
+  waitFor,
+} from '../helpers/testGate';
 
 const PREFIX = `gate-pbtest-${process.pid}`;
 const WS_PORT = 7930;
@@ -23,6 +31,10 @@ const URL = `ws://127.0.0.1:${WS_PORT}/ws`;
 const JSON_ONLY_URL = `ws://127.0.0.1:${JSON_ONLY_PORT}/ws`;
 
 const available = process.env.GATE_TEST_REDIS !== '0';
+// Codec behaviour is transport-independent, so this suite pins one: the
+// production default (nats) when it is up, redis otherwise. Transport
+// equivalence itself is covered by cluster.test.ts, which runs on both.
+const TRANSPORT = transportsUnderTest().at(-1) ?? 'redis';
 const tokenFor = (uid: string): string =>
   jwt.sign({ sub: uid }, JWT_SECRET, { algorithm: 'HS256', expiresIn: 300 });
 
@@ -81,6 +93,7 @@ describe.skipIf(!available)('protobuf codec over the wire', () => {
       adminPort: ADMIN_PORT,
       keyPrefix: PREFIX,
       resumeWindowMs: 4_000,
+      transport: TRANSPORT,
     });
     // A gate that serves JSON only, to check that a protobuf client is
     // refused rather than quietly handed JSON.
@@ -91,6 +104,7 @@ describe.skipIf(!available)('protobuf codec over the wire', () => {
       keyPrefix: PREFIX,
       codecs: ['json'],
       defaultCodec: 'json',
+      transport: TRANSPORT,
     });
 
     game = new ServiceNode({
@@ -98,6 +112,8 @@ describe.skipIf(!available)('protobuf codec over the wire', () => {
       nodeId: 'pb-game-1',
       redisUrl: REDIS_URL,
       keyPrefix: PREFIX,
+      transport: TRANSPORT,
+      subjectPrefix: PREFIX,
     });
     game
       // Binary in, binary out: the service owns the schema, the gate does not.

@@ -25,6 +25,7 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
+    "@nats-io/transport-node": "^3.4.0",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",

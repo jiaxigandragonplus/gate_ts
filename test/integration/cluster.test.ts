@@ -14,25 +14,40 @@ import {
   flushPrefix,
   sleep,
   startGate,
+  transportsUnderTest,
   waitFor,
 } from '../helpers/testGate';
 
-const PREFIX = `gate-test-${process.pid}`;
-const GATE_A_PORT = 7910;
-const GATE_B_PORT = 7911;
-const ADMIN_A_PORT = 7920;
-const ADMIN_B_PORT = 7921;
 const ADMIN_TOKEN = 'test-admin-token';
-const URL_A = `ws://127.0.0.1:${GATE_A_PORT}/ws`;
-const URL_B = `ws://127.0.0.1:${GATE_B_PORT}/ws`;
-
-// Probed once in test/helpers/globalSetup.ts.
-const available = process.env.GATE_TEST_REDIS !== '0';
 
 const tokenFor = (uid: string, ttl = 300): string =>
   jwt.sign({ sub: uid }, JWT_SECRET, { algorithm: 'HS256', expiresIn: ttl });
 
-describe.skipIf(!available)('gate cluster', () => {
+// Probed once in test/helpers/globalSetup.ts. The whole suite runs once per
+// available transport: behavioural equivalence between redis and nats is the
+// property that matters, so it is asserted by re-running every test rather
+// than by a separate transport-specific suite.
+const TRANSPORTS = transportsUnderTest();
+if (TRANSPORTS.length === 0) {
+  describe.skip('gate cluster (redis unavailable)', () => {
+    it('skipped', () => undefined);
+  });
+}
+
+for (const transport of TRANSPORTS) {
+describe(`gate cluster over ${transport}`, () => {
+  // Ports and keyspace are per-transport so the two runs cannot collide.
+  const OFFSET = transport === 'nats' ? 40 : 0;
+  const PREFIX = `gate-test-${transport}-${process.pid}`;
+  const GATE_A_PORT = 7910 + OFFSET;
+  const GATE_B_PORT = 7911 + OFFSET;
+  const GATE_C_PORT = 7912 + OFFSET;
+  const ADMIN_A_PORT = 7920 + OFFSET;
+  const ADMIN_B_PORT = 7921 + OFFSET;
+  const ADMIN_C_PORT = 7922 + OFFSET;
+  const URL_A = `ws://127.0.0.1:${GATE_A_PORT}/ws`;
+  const URL_B = `ws://127.0.0.1:${GATE_B_PORT}/ws`;
+
   let gateA: Gate;
   let gateB: Gate;
   let game: ServiceNode;
@@ -57,6 +72,7 @@ describe.skipIf(!available)('gate cluster', () => {
       resumeWindowMs: 4_000,
       replayBufferSize: 8,
       requestTimeoutMs: 1_500,
+      transport,
     });
     gateB = await startGate({
       gateId: 'gate-b',
@@ -67,9 +83,17 @@ describe.skipIf(!available)('gate cluster', () => {
       resumeWindowMs: 4_000,
       replayBufferSize: 8,
       requestTimeoutMs: 1_500,
+      transport,
     });
 
-    game = new ServiceNode({ service: 'game', nodeId: 'game-1', redisUrl: REDIS_URL, keyPrefix: PREFIX });
+    game = new ServiceNode({
+      service: 'game',
+      nodeId: 'game-1',
+      redisUrl: REDIS_URL,
+      keyPrefix: PREFIX,
+      transport,
+      subjectPrefix: PREFIX,
+    });
     game
       .on('game.echo', (ctx) => ({ echo: ctx.payload, uid: ctx.uid, servedBy: game.nodeId }))
       .on('game.count', (() => {
@@ -91,7 +115,14 @@ describe.skipIf(!available)('gate cluster', () => {
       });
     await game.start();
 
-    chat = new ServiceNode({ service: 'chat', nodeId: 'chat-1', redisUrl: REDIS_URL, keyPrefix: PREFIX });
+    chat = new ServiceNode({
+      service: 'chat',
+      nodeId: 'chat-1',
+      redisUrl: REDIS_URL,
+      keyPrefix: PREFIX,
+      transport,
+      subjectPrefix: PREFIX,
+    });
     chat.on('chat.send', (ctx) => ({ sent: true, from: ctx.uid, payload: ctx.payload }));
     await chat.start();
   });
@@ -412,14 +443,15 @@ describe.skipIf(!available)('gate cluster', () => {
     // ticket in redis and the client re-establishes on another node.
     const gateC = await startGate({
       gateId: 'gate-c',
-      wsPort: 7912,
-      adminPort: 7922,
+      wsPort: GATE_C_PORT,
+      adminPort: ADMIN_C_PORT,
       keyPrefix: PREFIX,
       resumeWindowMs: 4_000,
+      transport,
     });
 
     const uid = 'rolling-restart';
-    const c = client(uid, 'ws://127.0.0.1:7912/ws', { autoReconnect: true });
+    const c = client(uid, `ws://127.0.0.1:${GATE_C_PORT}/ws`, { autoReconnect: true });
     await c.connect();
     expect(await c.request<{ gate: string }>('gate.whoami')).toMatchObject({ gate: 'gate-c' });
 
@@ -475,3 +507,4 @@ describe.skipIf(!available)('gate cluster', () => {
     expect(counters.counters.upstream_latency_count).toBeGreaterThan(0);
   });
 });
+}

@@ -4,7 +4,7 @@ import { RedisPool } from '../framework/redis/client';
 import { Keys } from '../framework/redis/keys';
 import { SessionRegistry } from '../framework/redis/sessionRegistry';
 import { NodeRegistry } from '../framework/redis/nodeRegistry';
-import { ClusterBus } from '../framework/redis/bus';
+import { createClusterBus, type ClusterBus } from '../framework/transport';
 import { BackendClient, ServiceUnavailableError } from './router/backendClient';
 import { RouteTable } from './router/routeTable';
 import { SessionManager } from './session/sessionManager';
@@ -65,7 +65,17 @@ export class Gate {
     this.pool = new RedisPool(cfg.redis.url);
     this.sessionRegistry = new SessionRegistry(this.pool.cmd, this.keys);
     this.nodes = new NodeRegistry(this.pool.cmd, this.keys, cfg.cluster.nodeTtlMs);
-    this.bus = new ClusterBus(this.pool, this.keys, cfg.gateId);
+    this.bus = createClusterBus(
+      {
+        kind: cfg.cluster.transport,
+        redis: { pool: this.pool, keys: this.keys },
+        nats: {
+          subjectPrefix: cfg.nats.subjectPrefix,
+          options: { ...cfg.nats, name: cfg.gateId },
+        },
+      },
+      cfg.gateId,
+    );
     this.routes = new RouteTable(cfg.routes, cfg.defaultService);
     this.jwt = new JwtVerifier(cfg.jwt);
 
@@ -147,6 +157,14 @@ export class Gate {
     this.metrics.registerGauge('protocol_errors_total', () => t.protocolErrors);
     this.metrics.registerGauge('backpressure_drops_total', () => t.backpressureDrops);
 
+    // Transport counters, when the transport has any (NATS reconnects and
+    // slow consumers are the two worth alerting on).
+    if (this.bus.counters) {
+      for (const name of Object.keys(this.bus.counters())) {
+        this.metrics.registerGauge(`transport_${name}`, () => this.bus.counters?.()[name] ?? 0);
+      }
+    }
+
     this.backend.setTimeoutHandler(({ sid, id, cmd, service }) => {
       this.metrics.upstreamTimeouts += 1;
       const session = this.sessions.getBySid(sid);
@@ -164,7 +182,7 @@ export class Gate {
     this.redisReady = true;
     this.log.info({ url: redact(this.cfg.redis.url) }, 'connected to redis');
 
-    await this.bus.start((msg) => this.onClusterMessage(msg));
+    await this.bus.start((msg: DownstreamMessage) => this.onClusterMessage(msg));
     this.sessions.start();
     await this.heartbeat();
     this.heartbeatTimer = setInterval(() => {
@@ -179,6 +197,7 @@ export class Gate {
       {
         gate: this.cfg.gateId,
         addr: this.cfg.advertiseAddr,
+        transport: this.bus.kind,
         codecs: this.cfg.ws.codecs,
         defaultCodec: this.cfg.ws.defaultCodec,
         routes: this.routes.describe(),
@@ -587,6 +606,7 @@ export class Gate {
     return {
       gate: this.cfg.gateId,
       addr: this.cfg.advertiseAddr,
+      transport: this.bus.kind,
       uptimeSec: Math.floor((Date.now() - this.metrics.startedAt) / 1000),
       draining: this.shuttingDown,
       connections: this.ws.connectionCount,
@@ -596,6 +616,7 @@ export class Gate {
         suspended: this.sessions.suspendedCount,
       },
       upstreamPending: this.backend.pendingCount,
+      transportCounters: this.bus.counters?.() ?? null,
       routes: this.routes.describe(),
       counters: this.metrics.snapshot(),
     };

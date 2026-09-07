@@ -3,8 +3,10 @@ import { Gate } from '../../src/gate';
 import type { GateConfig } from '../../src/gate/config';
 import type { RouteRule } from '../../src/gate/router/routeTable';
 import type { CodecName } from '../../src/framework/protocol/codec';
+import type { TransportKind } from '../../src/framework/transport/types';
 
 export const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
+export const NATS_URL = process.env.TEST_NATS_URL ?? 'nats://127.0.0.1:4222';
 export const JWT_SECRET = 'integration-test-secret';
 
 export const TEST_ROUTES: RouteRule[] = [
@@ -26,6 +28,7 @@ export interface TestGateOptions {
   msgsPerSec?: number;
   codecs?: CodecName[];
   defaultCodec?: CodecName;
+  transport?: TransportKind;
 }
 
 export function testConfig(o: TestGateOptions): GateConfig {
@@ -57,7 +60,21 @@ export function testConfig(o: TestGateOptions): GateConfig {
     },
     limits: { msgsPerSec: o.msgsPerSec ?? 200, burst: o.msgsPerSec ?? 400 },
     redis: { url: REDIS_URL, keyPrefix: o.keyPrefix },
-    cluster: { heartbeatMs: 60_000, nodeTtlMs: 30_000, notifySessionEvents: true },
+    cluster: {
+      heartbeatMs: 60_000,
+      nodeTtlMs: 30_000,
+      notifySessionEvents: true,
+      transport: o.transport ?? 'redis',
+    },
+    nats: {
+      servers: [NATS_URL],
+      subjectPrefix: o.keyPrefix,
+      tls: false,
+      maxReconnectAttempts: 5,
+      reconnectWaitMs: 100,
+      pingIntervalMs: 20_000,
+      requestTimeoutMs: 3_000,
+    },
     backend: { requestTimeoutMs: o.requestTimeoutMs ?? 3_000, stickyTtlMs: 60_000 },
     routes: TEST_ROUTES,
     admin: {
@@ -79,6 +96,27 @@ export async function startGate(o: TestGateOptions): Promise<Gate> {
   const gate = new Gate(testConfig(o));
   await gate.start();
   return gate;
+}
+
+/** Transports the integration suites should run against. */
+export function transportsUnderTest(): TransportKind[] {
+  // Redis is required either way: it holds cluster state (session ownership,
+  // node registry) regardless of which transport carries messages.
+  if (process.env.GATE_TEST_REDIS === '0') return [];
+  const out: TransportKind[] = ['redis'];
+  if (process.env.GATE_TEST_NATS !== '0') out.push('nats');
+  return out;
+}
+
+export async function natsAvailable(): Promise<boolean> {
+  try {
+    const { connect } = (await import('@nats-io/transport-node')) as typeof import('@nats-io/transport-node');
+    const nc = await connect({ servers: NATS_URL, maxReconnectAttempts: 0, timeout: 1500 });
+    await nc.close();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function redisAvailable(): Promise<boolean> {

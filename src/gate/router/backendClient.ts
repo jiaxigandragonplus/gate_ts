@@ -1,5 +1,5 @@
 import type Redis from 'ioredis';
-import type { ClusterBus } from '../../framework/redis/bus';
+import type { ClusterBus } from '../../framework/transport';
 import type { Keys } from '../../framework/redis/keys';
 import { NodeRegistry, pickNode, type NodeInfo } from '../../framework/redis/nodeRegistry';
 import type { UpstreamMessage } from '../../framework/protocol/internal';
@@ -72,16 +72,18 @@ export class BackendClient {
     sticky: boolean,
   ): Promise<string> {
     const node = await this.resolveNode(service, routingKey, sticky);
-    const received = await this.bus.publishToServiceNode(service, node, msg);
-    if (received > 0) return node;
+    const delivery = await this.bus.publishToServiceNode(service, node, msg);
+    // 'unknown' means the transport cannot tell (core NATS publish); the
+    // request timeout is the backstop there.
+    if (delivery !== 'no-subscriber') return node;
 
-    // Nobody was listening on that channel: the node died between our
-    // registry read and the publish. Invalidate and retry once.
+    // Nobody was listening: the node died between our registry read and the
+    // publish. Invalidate and retry once.
     this.log.warn({ service, node }, 'no subscriber on service channel, re-routing');
     await this.invalidate(service, routingKey, sticky);
     const retryNode = await this.resolveNode(service, routingKey, sticky);
     const retried = await this.bus.publishToServiceNode(service, retryNode, msg);
-    if (retried === 0) throw new ServiceUnavailableError(service);
+    if (retried === 'no-subscriber') throw new ServiceUnavailableError(service);
     return retryNode;
   }
 
@@ -172,7 +174,21 @@ export class BackendClient {
   private async liveNodes(service: string): Promise<NodeInfo[]> {
     const cached = this.nodeCache.get(service);
     if (cached && Date.now() - cached.at < this.nodeCacheMs) return cached.nodes;
-    const nodes = await this.registry.listServiceNodes(service);
+
+    const all = await this.registry.listServiceNodes(service);
+    // A node that speaks another transport can never hear us: it registers
+    // fine and looks healthy, so without this check the only symptom would be
+    // every request timing out. Exclude it and say why.
+    const nodes = all.filter((n) => {
+      const theirs = n.meta?.['transport'];
+      if (typeof theirs !== 'string' || theirs === this.bus.kind) return true;
+      this.log.error(
+        { service, node: n.id, nodeTransport: theirs, gateTransport: this.bus.kind },
+        'ignoring service node: it is on a different cluster transport than this gate',
+      );
+      return false;
+    });
+
     this.nodeCache.set(service, { nodes, at: Date.now() });
     return nodes;
   }

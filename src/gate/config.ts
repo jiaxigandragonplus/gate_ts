@@ -5,6 +5,8 @@ import * as dotenv from 'dotenv';
 import type { RouteRule } from './router/routeTable';
 import type { CodecName } from '../framework/protocol/codec';
 import { parseCodecList, parseCodecName } from '../framework/protocol/codecs';
+import { normalizeNodeId } from '../framework/nats/subjects';
+import type { TransportKind } from '../framework/transport/types';
 
 dotenv.config();
 
@@ -110,6 +112,23 @@ export interface GateConfig {
     nodeTtlMs: number;
     /** Forward online/offline/suspended/resumed events to backend services. */
     notifySessionEvents: boolean;
+    /** Which transport carries server-to-server messages. */
+    transport: TransportKind;
+  };
+
+  /** Only used when cluster.transport is 'nats'. */
+  nats: {
+    servers: string[];
+    subjectPrefix: string;
+    token?: string;
+    user?: string;
+    pass?: string;
+    credsFile?: string;
+    tls: boolean;
+    maxReconnectAttempts: number;
+    reconnectWaitMs: number;
+    pingIntervalMs: number;
+    requestTimeoutMs: number;
   };
 
   backend: {
@@ -194,12 +213,22 @@ function loadCodecs(): { codecs: CodecName[]; defaultCodec: CodecName } {
   return { codecs, defaultCodec };
 }
 
+function loadTransport(): TransportKind {
+  const value = str('CLUSTER_TRANSPORT', 'nats').trim().toLowerCase();
+  if (value !== 'redis' && value !== 'nats') {
+    throw new Error(`CLUSTER_TRANSPORT must be "redis" or "nats", got "${value}"`);
+  }
+  return value;
+}
+
 export function loadConfig(): GateConfig {
   const port = int('WS_PORT', 7000);
   const { routes, defaultService } = loadRoutes();
   const { codecs, defaultCodec } = loadCodecs();
   return {
-    gateId: str('GATE_ID', `${hostname()}-${port}`),
+    // Normalized once here so the same value is safe as a redis key, a NATS
+    // subject token, a log field and a metric label.
+    gateId: normalizeNodeId(str('GATE_ID', `${hostname()}-${port}`)),
     advertiseAddr: str('ADVERTISE_ADDR', `${hostname()}:${port}`),
     env: str('NODE_ENV', 'development'),
 
@@ -241,6 +270,26 @@ export function loadConfig(): GateConfig {
       heartbeatMs: int('CLUSTER_HEARTBEAT_MS', 5_000),
       nodeTtlMs: int('CLUSTER_NODE_TTL_MS', 15_000),
       notifySessionEvents: bool('CLUSTER_NOTIFY_SESSION_EVENTS', true),
+      transport: loadTransport(),
+    },
+
+    nats: {
+      servers: str('NATS_SERVERS', 'nats://127.0.0.1:4222')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      subjectPrefix: str('NATS_SUBJECT_PREFIX', 'gate'),
+      ...(optStr('NATS_TOKEN') === undefined ? {} : { token: optStr('NATS_TOKEN') as string }),
+      ...(optStr('NATS_USER') === undefined ? {} : { user: optStr('NATS_USER') as string }),
+      ...(optStr('NATS_PASS') === undefined ? {} : { pass: optStr('NATS_PASS') as string }),
+      ...(optStr('NATS_CREDS_FILE') === undefined
+        ? {}
+        : { credsFile: optStr('NATS_CREDS_FILE') as string }),
+      tls: bool('NATS_TLS', false),
+      maxReconnectAttempts: int('NATS_MAX_RECONNECT', -1),
+      reconnectWaitMs: int('NATS_RECONNECT_WAIT_MS', 250),
+      pingIntervalMs: int('NATS_PING_INTERVAL_MS', 20_000),
+      requestTimeoutMs: int('NATS_REQUEST_TIMEOUT_MS', 5_000),
     },
 
     backend: {
