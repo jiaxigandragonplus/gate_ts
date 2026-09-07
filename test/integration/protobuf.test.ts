@@ -7,11 +7,11 @@ import jwt from 'jsonwebtoken';
 import protobuf from 'protobufjs';
 import WebSocket from 'ws';
 import type { Gate } from '../../src/gate';
-import { GateClient } from '../../src/sdk/gateClient';
-import { ServiceNode } from '../../src/sdk/serviceNode';
-import { SUBPROTOCOLS } from '../../src/protocol/codecs';
-import { protobufCodec } from '../../src/protocol/protobufCodec';
-import { PacketType } from '../../src/protocol/packet';
+import { GateClient } from '../../src/client/gateClient';
+import { ServiceNode } from '../../src/framework/serviceNode';
+import { SUBPROTOCOLS } from '../../src/framework/protocol/codecs';
+import { protobufCodec } from '../../src/framework/protocol/protobufCodec';
+import { PacketType } from '../../src/framework/protocol/packet';
 import { JWT_SECRET, REDIS_URL, flushPrefix, sleep, startGate, waitFor } from '../helpers/testGate';
 
 const PREFIX = `gate-pbtest-${process.pid}`;

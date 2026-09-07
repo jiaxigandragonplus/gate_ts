@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Session } from '../../src/session/session';
-import { PacketType, type ServerPacket } from '../../src/protocol/packet';
-import type { Connection } from '../../src/net/connection';
+import { Session } from '../../src/gate/session/session';
+import { PacketType, type ServerPacket } from '../../src/framework/protocol/packet';
+import type { Connection } from '../../src/gate/net/connection';
 
 function makeSession(replayCapacity = 8) {
   const session = new Session({

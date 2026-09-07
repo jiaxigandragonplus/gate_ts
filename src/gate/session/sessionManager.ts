@@ -1,12 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { Session } from './session';
 import type { Connection } from '../net/connection';
-import type { ResumeTicket, SessionOwner, SessionRegistry } from '../redis/sessionRegistry';
-import { SessionRegistry as Registry } from '../redis/sessionRegistry';
-import type { ClusterBus } from '../redis/bus';
-import { CloseCode, KICK_REASON, PacketType, type KickReason } from '../protocol/packet';
-import { shortId } from '../util/id';
-import { logger } from '../util/logger';
+import type { ResumeTicket, SessionOwner, SessionRegistry } from '../../framework/redis/sessionRegistry';
+import { SessionRegistry as Registry } from '../../framework/redis/sessionRegistry';
+import type { ClusterBus } from '../../framework/redis/bus';
+import { CloseCode, KICK_REASON, PacketType, type KickReason } from '../../framework/protocol/packet';
+import { shortId } from '../../framework/util/id';
+import { logger } from '../../framework/util/logger';
 
 export interface SessionManagerOptions {
   gateId: string;

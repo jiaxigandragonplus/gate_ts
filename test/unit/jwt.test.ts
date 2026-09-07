@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import jwt from 'jsonwebtoken';
 import { generateKeyPairSync } from 'node:crypto';
-import { JwtVerifier, AuthError } from '../../src/auth/jwt';
-import type { JwtConfig } from '../../src/config';
+import { JwtVerifier, AuthError } from '../../src/gate/auth';
+import type { JwtConfig } from '../../src/gate/config';
 
 const secret = 'unit-test-secret';
 const base: JwtConfig = {

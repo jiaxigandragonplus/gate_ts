@@ -6,9 +6,7 @@
  * Registering the same service twice (different node ids) is how you verify
  * that sticky routing keeps one player on one node.
  */
-import { ServiceNode, ServiceError } from '../src/sdk/serviceNode';
-import { ErrorCode } from '../src/protocol/packet';
-import { logger } from '../src/util/logger';
+import { ServiceNode, ServiceError, ErrorCode, logger } from '../src/framework';
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);

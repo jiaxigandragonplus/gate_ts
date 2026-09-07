@@ -6,8 +6,8 @@ import {
   PacketType,
   type ServerPacket,
   type SequencedServerPacket,
-} from '../protocol/packet';
-import type { UpstreamMeta } from '../protocol/internal';
+} from '../../framework/protocol/packet';
+import type { UpstreamMeta } from '../../framework/protocol/internal';
 
 export type SessionState = 'active' | 'suspended' | 'closed';
 

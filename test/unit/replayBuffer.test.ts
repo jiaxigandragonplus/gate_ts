@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ReplayBuffer } from '../../src/session/replayBuffer';
-import { PacketType, type SequencedServerPacket } from '../../src/protocol/packet';
+import { ReplayBuffer } from '../../src/gate/session/replayBuffer';
+import { PacketType, type SequencedServerPacket } from '../../src/framework/protocol/packet';
 
 const push = (seq: number): SequencedServerPacket => ({
   t: PacketType.Push,

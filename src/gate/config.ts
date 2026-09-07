@@ -2,9 +2,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { resolve } from 'node:path';
 import * as dotenv from 'dotenv';
-import type { RouteRule } from '../router/routeTable';
-import type { CodecName } from '../protocol/codec';
-import { parseCodecList, parseCodecName } from '../protocol/codecs';
+import type { RouteRule } from './router/routeTable';
+import type { CodecName } from '../framework/protocol/codec';
+import { parseCodecList, parseCodecName } from '../framework/protocol/codecs';
 
 dotenv.config();
 

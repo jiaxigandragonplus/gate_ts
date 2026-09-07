@@ -1,8 +1,8 @@
 import type { WebSocket } from 'ws';
-import { CloseCode, ErrorCode, PacketType, type ServerPacket } from '../protocol/packet';
-import type { Codec } from '../protocol/codec';
-import { TokenBucket } from '../util/rateLimiter';
-import { nextConnId } from '../util/id';
+import { CloseCode, ErrorCode, PacketType, type ServerPacket } from '../../framework/protocol/packet';
+import type { Codec } from '../../framework/protocol/codec';
+import { TokenBucket } from '../../framework/util/rateLimiter';
+import { nextConnId } from '../../framework/util/id';
 import type { Session } from '../session/session';
 import type { TransportStats } from './stats';
 

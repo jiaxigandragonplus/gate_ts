@@ -7,9 +7,9 @@ import {
   type ClientPacket,
   type ServerPacket,
   type KickPacket,
-} from '../protocol/packet';
-import type { Codec, CodecName } from '../protocol/codec';
-import { CODECS, SUBPROTOCOLS } from '../protocol/codecs';
+} from '../framework/protocol/packet';
+import type { Codec, CodecName } from '../framework/protocol/codec';
+import { CODECS, SUBPROTOCOLS } from '../framework/protocol/codecs';
 
 export interface GateClientOptions {
   url: string;

@@ -82,7 +82,7 @@ docker compose up --build     # 客户端连 ws://127.0.0.1:7080/ws
 
 ## 协议
 
-两种编码，一套语义：**JSON**（默认，好调试）和 **protobuf**（省带宽），由客户端在握手时协商，同一个 gate 上两种客户端可以共存。完整包结构见 [`docs/protocol.md`](docs/protocol.md)，类型定义见 [src/protocol/packet.ts](src/protocol/packet.ts)，protobuf schema 见 [proto/gate.proto](proto/gate.proto)。
+两种编码，一套语义：**JSON**（默认，好调试）和 **protobuf**（省带宽），由客户端在握手时协商，同一个 gate 上两种客户端可以共存。完整包结构见 [`docs/protocol.md`](docs/protocol.md)，类型定义见 [src/framework/protocol/packet.ts](src/framework/protocol/packet.ts)，protobuf schema 见 [proto/gate.proto](proto/gate.proto)。
 
 | 值 | 类型 | 方向 | 说明 |
 | --- | --- | --- | --- |
@@ -222,7 +222,7 @@ client                     gate                      game
 服务侧用 `ServiceNode`，不需要知道任何 gate 的地址：
 
 ```ts
-import { ServiceNode, ServiceError } from 'gate-ts/src/sdk/serviceNode';
+import { ServiceNode, ServiceError, ErrorCode } from 'gate-ts/src/framework';
 
 const node = new ServiceNode({ service: 'game' });
 
@@ -336,6 +336,8 @@ npm run load -- --clients 150 --rate 6 --seconds 10 --codec pb   --admin http://
 
 [test/integration/protobuf.test.ts](test/integration/protobuf.test.ts) 单独覆盖编码：子协议协商、JSON 与 protobuf 客户端同 gate 共存、二进制载荷双向原样透传、跨编码的载荷转换、广播同时到达两种客户端、protobuf 会话的重连重放、只开 JSON 的节点拒绝 protobuf 客户端。编码本身还有 [test/unit/codec.test.ts](test/unit/codec.test.ts) 的一致性测试——同一张包用例表跑过**每一种编码**的双向往返，另有未知字段前向兼容和描述符漂移检查。
 
+[test/unit/moduleBoundaries.test.ts](test/unit/moduleBoundaries.test.ts) 守住上面那条分层：共享模块不许 import `src/gate/`，网关不许 import `sdk/`，`protocol/` 保持零依赖。目录划分靠测试维持，不靠 review 记性。
+
 本机参考数据（M 系列笔记本，2 gate + 2 game 节点 + Redis 全在同一台）：300 并发连接、1200 req/s 目标压力下实测 1071 req/s，p50 3ms / p95 6ms / p99 8ms，零失败零重连。
 
 同一套压测下换编码（150 连接 × 6 req/s，载荷是 JSON，所以省的纯粹是信封）：
@@ -357,19 +359,44 @@ npm run load -- --clients 150 --rate 6 --seconds 10 --codec pb   --admin http://
 ## 目录结构
 
 ```
-proto/           protobuf schema（gate.proto，信封定义）
+proto/             protobuf schema（gate.proto，信封定义）
 src/
-  protocol/      包定义、编解码（JSON / protobuf）、协商、集群内部消息格式
-    pb/          由 gate.proto 生成的描述符（提交进仓库，运行时不读文件）
-  auth/          JWT 校验
-  net/           WebSocket 接入层、连接对象（保活/背压/限流）
-  session/       会话对象、重放缓冲、会话管理器（登录/重连/顶号/停机）
-  router/        路由表、后端客户端（粘性绑定/超时跟踪）
-  redis/         连接池、key 布局、会话注册表(Lua)、节点注册表、消息总线
-  metrics/       计数器、管理与探针 HTTP 服务
-  sdk/           ServiceNode（后端接入）、GateClient（客户端）
-  gate.ts        编排：把上面这些接起来，处理每一个包
-tools/           token 签发、模拟后端、冒烟客户端、压测、proto 代码生成
-test/            单元 + 集成
-deploy/          nginx 配置
+  index.ts         进程入口：起 Gate、装信号处理
+  framework/       ── 服务器公共代码（基础层）───────────
+    index.ts       后端服务需要的出口（ServiceNode / ErrorCode / logger）
+    serviceNode.ts 后端服务接入：注册 handler、推送、组播、踢人
+    protocol/      包定义、编解码（JSON / protobuf）、协商、集群内部消息格式
+      pb/          由 gate.proto 生成的描述符（提交进仓库，运行时不读文件）
+    redis/         连接池、key 布局、会话注册表(Lua)、节点注册表、消息总线
+    util/          日志、id、限流
+  gate/            ── 网关：基于 framework 的一个服务 ────
+    index.ts       对外出口（Gate、loadConfig）
+    gate.ts        编排：把下面这些接起来，处理每一个包
+    config.ts      环境变量 → 配置
+    auth.ts        JWT 校验
+    net/           WebSocket 接入层、连接对象（保活/背压/限流）
+    session/       会话对象、重放缓冲、会话管理器（登录/重连/顶号/停机）
+    router/        路由表、后端客户端（粘性绑定/超时跟踪）
+    metrics/       计数器、管理与探针 HTTP 服务
+  client/          ── 客户端 SDK（不是服务器代码）────────
+    gateClient.ts  自动重连 + 断点续传的参考实现
+tools/             token 签发、模拟后端、冒烟客户端、压测、proto 代码生成
+test/              单元 + 集成
+deploy/            nginx 配置
 ```
+
+三层，依赖方向单向向内：
+
+```
+    client/                gate/            （将来的 game/ chat/…）
+       │                     │                        │
+       └──── protocol only ──┴────────┬───────────────┘
+                                      ▼
+                                 framework/
+```
+
+- **`framework/`** 是基础层，不知道谁在用它 —— 所以 `game` / `chat` 服务可以直接长在上面，只写 handler，不用抄一遍 gate 的连接管理、注册表、心跳。
+- **`gate/`** 就是基于 framework 的一个服务，它不 import `framework/serviceNode`（网关不是后端服务），也不 import `client/`。
+- **`client/`** 只依赖 `framework/protocol/` —— 一行 redis 代码都不许碰，否则 SDK 就没法在浏览器/游戏引擎里用了。
+
+这三条不靠 review 记性维持，[test/unit/moduleBoundaries.test.ts](test/unit/moduleBoundaries.test.ts) 会盯着。

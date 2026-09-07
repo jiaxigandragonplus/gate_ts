@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { TokenBucket } from '../../src/util/rateLimiter';
+import { TokenBucket } from '../../src/framework/util/rateLimiter';
 
 describe('TokenBucket', () => {
   beforeEach(() => vi.useFakeTimers());

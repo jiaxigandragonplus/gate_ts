@@ -14,8 +14,8 @@
  */
 import jwt from 'jsonwebtoken';
 import * as dotenv from 'dotenv';
-import { GateClient } from '../src/sdk/gateClient';
-import { parseCodecName } from '../src/protocol/codecs';
+import { GateClient } from '../src/client/gateClient';
+import { parseCodecName } from '../src/framework/protocol/codecs';
 
 dotenv.config();
 

@@ -1,5 +1,5 @@
 import jwt, { type JwtPayload, type VerifyOptions, type Algorithm } from 'jsonwebtoken';
-import type { JwtConfig } from '../config';
+import type { JwtConfig } from './config';
 
 export interface AuthedUser {
   uid: string;

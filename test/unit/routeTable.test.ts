@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RouteTable } from '../../src/router/routeTable';
+import { RouteTable } from '../../src/gate/router/routeTable';
 
 describe('RouteTable', () => {
   const table = new RouteTable([

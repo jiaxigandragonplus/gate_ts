@@ -7,7 +7,7 @@
 | JSON | `gate.json.v1` | 文本 | 默认。好抓包、好调试，任何客户端都能手写 |
 | protobuf | `gate.pb.v1` | 二进制 | 信封小一半左右，载荷可以是原始字节 |
 
-编码是**连接级**的，一个 gate 上两种客户端可以共存。实现见 [src/protocol/codec.ts](../src/protocol/codec.ts)（接口 + JSON）、[src/protocol/protobufCodec.ts](../src/protocol/protobufCodec.ts)、[src/protocol/codecs.ts](../src/protocol/codecs.ts)（协商）。
+编码是**连接级**的，一个 gate 上两种客户端可以共存。实现见 [src/framework/protocol/codec.ts](../src/framework/protocol/codec.ts)（接口 + JSON）、[src/framework/protocol/protobufCodec.ts](../src/framework/protocol/protobufCodec.ts)、[src/framework/protocol/codecs.ts](../src/framework/protocol/codecs.ts)（协商）。
 
 下面先讲语义（两种编码共通），最后讲两种编码各自的落地细节。
 
@@ -126,7 +126,7 @@
 
 7. 编码在连接建立时就定了，重连时用同一种；`GateClient` 的 `codec` 选项即此。
 
-参考实现：[src/sdk/gateClient.ts](../src/sdk/gateClient.ts)。
+参考实现：[src/client/gateClient.ts](../src/client/gateClient.ts)。
 
 ## 编码细节
 
@@ -180,7 +180,7 @@ proto3 没有字段存在性，所以下列默认值一律按"缺省"处理：
 
 未知字段会被跳过，所以新客户端加了字段也不会打挂老网关（有测试覆盖）。
 
-`src/protocol/pb/descriptor.ts` 是由 `gate.proto` 生成并**提交进仓库**的 JSON 描述符：运行时 `Root.fromJSON` 直接加载，不读文件，`src/` / `dist/` / 容器镜像里的路径都不用操心。改完 `.proto` 跑 `npm run proto:gen`，忘了跑会有单元测试报漂移。
+`src/framework/protocol/pb/descriptor.ts` 是由 `gate.proto` 生成并**提交进仓库**的 JSON 描述符：运行时 `Root.fromJSON` 直接加载，不读文件，`src/` / `dist/` / 容器镜像里的路径都不用操心。改完 `.proto` 跑 `npm run proto:gen`，忘了跑会有单元测试报漂移。
 
 ### 跨编码的载荷转换
 
@@ -195,9 +195,9 @@ proto3 没有字段存在性，所以下列默认值一律按"缺省"处理：
 
 ## 集群内部消息
 
-gate ↔ 后端服务，同样走 Redis pub/sub，格式见 [src/protocol/internal.ts](../src/protocol/internal.ts)。
+gate ↔ 后端服务，同样走 Redis pub/sub，格式见 [src/framework/protocol/internal.ts](../src/framework/protocol/internal.ts)。
 
-集群内部一直是 JSON（编码只是客户端与网关之间的事）。载荷走两个互斥字段：`d` 放 JSON 载荷，`db` 放不透明字节的 base64。别直接读这两个字段，用 [src/protocol/payload.ts](../src/protocol/payload.ts) 的 `toInternal` / `fromInternal`；`ServiceNode` 已经帮你分好了 `ctx.payload`（JSON）和 `ctx.payloadBytes`（Buffer）。
+集群内部一直是 JSON（编码只是客户端与网关之间的事）。载荷走两个互斥字段：`d` 放 JSON 载荷，`db` 放不透明字节的 base64。别直接读这两个字段，用 [src/framework/protocol/payload.ts](../src/framework/protocol/payload.ts) 的 `toInternal` / `fromInternal`；`ServiceNode` 已经帮你分好了 `ctx.payload`（JSON）和 `ctx.payloadBytes`（Buffer）。
 
 上行 `<prefix>:svc:<service>:<nodeId>`：
 
@@ -230,7 +230,7 @@ gate ↔ 后端服务，同样走 Redis pub/sub，格式见 [src/protocol/intern
 | `<p>:svc:<service>:nodes` | hash | `nodeId → {addr,load,ts}` |
 | `<p>:bind:<uid>:<service>` | string | 粘性绑定的后端 nodeId |
 
-三段 Lua 脚本（[src/redis/sessionRegistry.ts](../src/redis/sessionRegistry.ts)）保证正确性：
+三段 Lua 脚本（[src/framework/redis/sessionRegistry.ts](../src/framework/redis/sessionRegistry.ts)）保证正确性：
 
 - `claim` —— 写入新所有者并返回旧所有者，一次原子操作。这是顶号在多 gate 下不会互踢的根本原因。
 - `release` —— 仅当 `sid` **和** `gate` 都匹配时才删除，会话迁移后老节点不会误删新记录。

@@ -1,9 +1,9 @@
 import type Redis from 'ioredis';
-import type { ClusterBus } from '../redis/bus';
-import type { Keys } from '../redis/keys';
-import { NodeRegistry, pickNode, type NodeInfo } from '../redis/nodeRegistry';
-import type { UpstreamMessage } from '../protocol/internal';
-import { logger } from '../util/logger';
+import type { ClusterBus } from '../../framework/redis/bus';
+import type { Keys } from '../../framework/redis/keys';
+import { NodeRegistry, pickNode, type NodeInfo } from '../../framework/redis/nodeRegistry';
+import type { UpstreamMessage } from '../../framework/protocol/internal';
+import { logger } from '../../framework/util/logger';
 
 export class ServiceUnavailableError extends Error {
   constructor(readonly service: string) {

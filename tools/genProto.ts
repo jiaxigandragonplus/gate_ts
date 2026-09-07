@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 import protobuf from 'protobufjs';
 
 const PROTO = resolve(__dirname, '../proto/gate.proto');
-const OUT = resolve(__dirname, '../src/protocol/pb/descriptor.ts');
+const OUT = resolve(__dirname, '../src/framework/protocol/pb/descriptor.ts');
 
 const root = protobuf.loadSync(PROTO);
 const descriptor = root.toJSON();

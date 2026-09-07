@@ -1,7 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import type { Metrics } from './metrics';
-import { logger } from '../util/logger';
+import { logger } from '../../framework/util/logger';
 
 export interface AdminHandlers {
   /** Aggregate view of this node, returned by GET /stats. */

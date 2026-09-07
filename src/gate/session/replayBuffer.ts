@@ -1,4 +1,4 @@
-import type { SequencedServerPacket } from '../protocol/packet';
+import type { SequencedServerPacket } from '../../framework/protocol/packet';
 
 /**
  * Fixed-size ring of the most recent downstream packets, kept so a resuming

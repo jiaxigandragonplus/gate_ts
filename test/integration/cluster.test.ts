@@ -5,9 +5,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import jwt from 'jsonwebtoken';
 import type { Gate } from '../../src/gate';
-import { GateClient, RequestError } from '../../src/sdk/gateClient';
-import { ServiceNode } from '../../src/sdk/serviceNode';
-import { CloseCode, ErrorCode, KICK_REASON } from '../../src/protocol/packet';
+import { GateClient, RequestError } from '../../src/client/gateClient';
+import { ServiceNode } from '../../src/framework/serviceNode';
+import { CloseCode, ErrorCode, KICK_REASON } from '../../src/framework/protocol/packet';
 import {
   JWT_SECRET,
   REDIS_URL,

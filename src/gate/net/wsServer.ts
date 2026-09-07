@@ -3,11 +3,11 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { Connection, type ConnectionMeta } from './connection';
 import { createTransportStats, type TransportStats } from './stats';
-import { CloseCode, ErrorCode } from '../protocol/packet';
-import { DecodeError, type Codec, type CodecName } from '../protocol/codec';
-import { negotiateCodec } from '../protocol/codecs';
-import type { ClientPacket } from '../protocol/packet';
-import { logger } from '../util/logger';
+import { CloseCode, ErrorCode } from '../../framework/protocol/packet';
+import { DecodeError, type Codec, type CodecName } from '../../framework/protocol/codec';
+import { negotiateCodec } from '../../framework/protocol/codecs';
+import type { ClientPacket } from '../../framework/protocol/packet';
+import { logger } from '../../framework/util/logger';
 
 export interface WsServerOptions {
   host: string;

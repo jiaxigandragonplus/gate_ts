@@ -1,18 +1,18 @@
 import { hostname } from 'node:os';
-import { RedisPool } from '../redis/client';
-import { Keys } from '../redis/keys';
-import { NodeRegistry } from '../redis/nodeRegistry';
-import { ErrorCode } from '../protocol/packet';
+import { RedisPool } from './redis/client';
+import { Keys } from './redis/keys';
+import { NodeRegistry } from './redis/nodeRegistry';
+import { ErrorCode } from './protocol/packet';
 import type {
   DownstreamMessage,
   UpRequest,
   UpNotify,
   UpSessionEvent,
   UpstreamMeta,
-} from '../protocol/internal';
-import { fromInternal, isBytes, toInternal } from '../protocol/payload';
-import { shortId } from '../util/id';
-import { logger } from '../util/logger';
+} from './protocol/internal';
+import { fromInternal, isBytes, toInternal } from './protocol/payload';
+import { shortId } from './util/id';
+import { logger } from './util/logger';
 
 export interface ServiceNodeOptions {
   /** Service name clients route to, e.g. "game" or "chat". */

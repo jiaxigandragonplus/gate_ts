@@ -1,10 +1,10 @@
 import type { GateConfig } from './config';
-import { JwtVerifier, AuthError } from './auth/jwt';
-import { RedisPool } from './redis/client';
-import { Keys } from './redis/keys';
-import { SessionRegistry } from './redis/sessionRegistry';
-import { NodeRegistry } from './redis/nodeRegistry';
-import { ClusterBus } from './redis/bus';
+import { JwtVerifier, AuthError } from './auth';
+import { RedisPool } from '../framework/redis/client';
+import { Keys } from '../framework/redis/keys';
+import { SessionRegistry } from '../framework/redis/sessionRegistry';
+import { NodeRegistry } from '../framework/redis/nodeRegistry';
+import { ClusterBus } from '../framework/redis/bus';
 import { BackendClient, ServiceUnavailableError } from './router/backendClient';
 import { RouteTable } from './router/routeTable';
 import { SessionManager } from './session/sessionManager';
@@ -24,10 +24,10 @@ import {
   type RequestPacket,
   type NotifyPacket,
   type HeartbeatPacket,
-} from './protocol/packet';
-import type { DownstreamMessage, UpstreamMessage } from './protocol/internal';
-import { fromInternal, toInternal } from './protocol/payload';
-import { logger } from './util/logger';
+} from '../framework/protocol/packet';
+import type { DownstreamMessage, UpstreamMessage } from '../framework/protocol/internal';
+import { fromInternal, toInternal } from '../framework/protocol/payload';
+import { logger } from '../framework/util/logger';
 
 /**
  * The gate process.

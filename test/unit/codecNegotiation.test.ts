@@ -4,7 +4,7 @@ import {
   parseCodecList,
   parseCodecName,
   SUBPROTOCOLS,
-} from '../../src/protocol/codecs';
+} from '../../src/framework/protocol/codecs';
 
 const both = ['json', 'protobuf'] as const;
 

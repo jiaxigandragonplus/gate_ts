@@ -1,8 +1,8 @@
 import Redis from 'ioredis';
 import { Gate } from '../../src/gate';
-import type { GateConfig } from '../../src/config';
-import type { RouteRule } from '../../src/router/routeTable';
-import type { CodecName } from '../../src/protocol/codec';
+import type { GateConfig } from '../../src/gate/config';
+import type { RouteRule } from '../../src/gate/router/routeTable';
+import type { CodecName } from '../../src/framework/protocol/codec';
 
 export const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
 export const JWT_SECRET = 'integration-test-secret';

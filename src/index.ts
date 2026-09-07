@@ -1,6 +1,5 @@
-import { loadConfig } from './config';
-import { Gate } from './gate';
-import { logger } from './util/logger';
+import { Gate, loadConfig } from './gate';
+import { logger } from './framework/util/logger';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();

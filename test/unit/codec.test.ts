@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import protobuf from 'protobufjs';
-import { DecodeError, jsonCodec, type Codec } from '../../src/protocol/codec';
-import { protobufCodec } from '../../src/protocol/protobufCodec';
-import { CODECS, SUBPROTOCOLS } from '../../src/protocol/codecs';
-import { gateDescriptor } from '../../src/protocol/pb/descriptor';
+import { DecodeError, jsonCodec, type Codec } from '../../src/framework/protocol/codec';
+import { protobufCodec } from '../../src/framework/protocol/protobufCodec';
+import { CODECS, SUBPROTOCOLS } from '../../src/framework/protocol/codecs';
+import { gateDescriptor } from '../../src/framework/protocol/pb/descriptor';
 import {
   CloseCode,
   ErrorCode,
@@ -12,7 +12,7 @@ import {
   PacketType,
   type ClientPacket,
   type ServerPacket,
-} from '../../src/protocol/packet';
+} from '../../src/framework/protocol/packet';
 
 const codecs: Array<[string, Codec]> = [
   ['json', jsonCodec],
