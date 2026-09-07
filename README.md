@@ -42,8 +42,11 @@
            ┌──────────┐      ┌──────────┐
            │   game   │      │   chat   │   ← 各自也可多开
            │  node×N  │      │  node×N  │
+           │ 业务系统  │      │          │
            └──────────┘      └──────────┘
 ```
+
+`game` 是主要的业务逻辑承载节点，业务按**系统**划分（见下方"game 节点"一节）。gate 只认 `game.` 这个前缀，系统内部的划分它完全不知道。
 
 职责分成**状态**和**消息**两件事，分别由 Redis 和 NATS 承担 —— 两者混用是集群最难推理的来源：
 
@@ -71,9 +74,9 @@ docker compose up -d redis nats   # 或用你本地已有的
 四个终端分别起：
 
 ```bash
-npm run dev            # gate: ws://127.0.0.1:7000/ws, admin :8000
-npm run mock:game      # 模拟 game 服
-npm run mock:chat      # 模拟 chat 服
+npm run dev            # gate:  ws://127.0.0.1:7000/ws, admin :8000
+npm run dev:game       # game:  业务节点，admin :9000
+npm run mock:chat      # 模拟 chat 服（示意其他服务）
 npm run client         # 冒烟客户端：登录 → 转发 → 推送
 ```
 
@@ -267,6 +270,89 @@ await node.kick('player-7', 'admin', 'cheating');                    // 封号�
 
 同一 service 起多个进程（不同 `nodeId`）即后端扩容，网关自动发现并按粘性分摊。
 
+## game 节点：业务按系统划分
+
+`game` 是业务逻辑的主要承载节点。它自己很薄 —— 集群那一套（传输、发现、心跳、请求响应）全部来自 `framework`，游戏逻辑全部在**系统**里。
+
+### 一个系统长什么样
+
+```ts
+export class BagSystem extends GameSystem<BagState> {
+  readonly name = 'bag';                       // 对应 game.bag.*
+
+  createState(): BagState {                    // 新玩家的初始切片
+    return { slots: [], capacity: 30 };
+  }
+
+  handlers() {                                 // 动作 → 处理函数
+    return {
+      list: (ctx) => ({ slots: ctx.state.slots }),
+      use: async (ctx, payload) => { /* ... */ },
+    };
+  }
+
+  onPlayerOnline(ctx) { /* 上线钩子 */ }
+  onTick(ctx) { /* 周期钩子，如 buff 到期 */ }
+
+  // 给别的系统调用的公开 API：只接 Player，不接调用方的 ctx
+  add(player: Player, items: ItemStack[]) {
+    const state = this.stateOf(player);
+    /* ... */
+    this.touch(player);                        // 标脏才会落盘
+  }
+}
+```
+
+注册就一行，`src/game/main.ts` 里除了注册什么都不做：
+
+```ts
+new GameNode(cfg).use(new ProfileSystem(), new BagSystem(), new QuestSystem());
+```
+
+### 命令路由
+
+`<service>.<system>.<action>`，即 **`game.bag.use` → `bag` 系统的 `use` 动作**。gate 按 `game.` 前缀整体转发、从不看里面，所以**加系统不需要动 gate、不需要改路由表**。
+
+### 三条硬规则
+
+**1. 每个玩家一个串行邮箱。** 这是并发模型的全部。Node 单线程但异步 —— 同一玩家的两个请求在 `await` 处交错就会写坏状态，这是 Node 游戏服最经典的 bug。所有消息（包括生命周期钩子和 tick）都排队执行，所以 handler 里可以放心 `await`。
+
+集成测试里有一个专门的 `RaceSystem`（读 → await → 写），10 个并发请求打过去必须精确得到 10；没有邮箱的话会明显小于 10。示例系统都是同步改状态的，**即使没有邮箱也看不出问题**，所以那个测试是故意构造的。
+
+邮箱有上限（`GAME_MAILBOX_LIMIT`），刷请求的玩家会收到 `RateLimited` 而不是让队列无限增长。
+
+**2. 系统不许碰别人的状态切片。** 要么调对方的公开方法（`ctx.systems.get<BagSystem>('bag').add(...)`），要么响应对方的事件。注意公开方法**只接 `Player`** —— 因为调用方手里的 `ctx` 是按它自己的状态类型定型的，传不过去。
+
+**3. 改了状态要 `this.touch(player)`。** 不标脏就不落盘 —— 这是"重启后我的道具没了"的经典成因。
+
+### 事件解耦
+
+需要"被动响应"时用事件，而不是让对方来调你：
+
+```ts
+// quest 系统在 init 里订阅，profile 完全不知道 quest 存在
+init(shared) {
+  shared.events.on('profile.levelUp', (e) => this.advance(e.player, ...));
+}
+```
+
+事件从玩家邮箱内部发出，handler 也在同一个任务里跑，所以直接改该玩家状态是安全的。一个 handler 抛错会被记录但不影响其他 handler，也不影响触发它的那个动作 —— **需要保证成功的事情不要用事件**，直接调方法。
+
+### 玩家状态与落盘
+
+gate 已经把玩家粘性绑定到单个 game 节点，所以状态可以放内存。加载/落盘由 `PlayerManager` 负责：
+
+- 上线加载（并发请求共享同一次加载），下线后**延迟卸载** `GAME_UNLOAD_DELAY_MS`（默认 90s，要 ≥ gate 的重连窗口，这样重连的玩家不用重新加载）
+- 周期落盘 + 卸载落盘 + 停机落盘，只写标脏的玩家
+- 存储是可替换的：`new GameNode(cfg, { store: myMysqlStore })`。自带的 redis 实现是 JSON per player，**给开发和小规模用**，没有索引也没有查询能力，真实项目请换成自己的数据库
+
+### 所有权租约
+
+两个 game 节点同时服务一个玩家 = 各存一份他的背包。所以每个玩家有一个 Redis 租约：
+
+- 冲突时**不会抢**，除非当前持有者已经从节点注册表消失（即确实死了）。从**活着**的节点手里抢会导致状态分叉，所以那种情况是显式失败（客户端收到 `ServiceUnavailable` 让它重试），宁可短暂不可用也不能让玩家数据分叉。
+- 租约丢失时本节点**不落盘就卸载** —— 不能覆盖新持有者的状态。
+
 ## 客户端 SDK
 
 `GateClient` 实现了重连协议的客户端那一半——保存 `sid`/`rt`、跟踪 `seq`、断线后只重发未被接受的请求：
@@ -376,6 +462,8 @@ npm run load -- --clients 150 --rate 6 --seconds 10 --codec pb   --admin http://
 
 [test/integration/protobuf.test.ts](test/integration/protobuf.test.ts) 单独覆盖编码：子协议协商、JSON 与 protobuf 客户端同 gate 共存、二进制载荷双向原样透传、跨编码的载荷转换、广播同时到达两种客户端、protobuf 会话的重连重放、只开 JSON 的节点拒绝 protobuf 客户端。编码本身还有 [test/unit/codec.test.ts](test/unit/codec.test.ts) 的一致性测试——同一张包用例表跑过**每一种编码**的双向往返，另有未知字段前向兼容和描述符漂移检查。
 
+[test/integration/game.test.ts](test/integration/game.test.ts) 覆盖 game 节点：命令路由到系统、跨系统调用、事件驱动的任务推进、系统推送、错误路径、**端到端的单玩家串行化**（10 个并发请求打一个读-await-写的 handler，必须精确得到 10）、掉线落盘后重新加载状态、邮箱刷爆时降载。[test/unit/playerMailbox.test.ts](test/unit/playerMailbox.test.ts) 单测邮箱本身（顺序、重入不死锁、上限、慢 handler 告警），[test/integration/playerLease.test.ts](test/integration/playerLease.test.ts) 覆盖所有权租约的六种情形。
+
 集群测试**整套跑两遍**（redis 和 nats 各一遍，共 52 个），传输的行为等价性由此保证；[test/integration/transport.test.ts](test/integration/transport.test.ts) 单独验证传输不匹配会快速报错而不是超时。NATS 起不来时对应那遍自动跳过。
 
 [test/unit/moduleBoundaries.test.ts](test/unit/moduleBoundaries.test.ts) 守住上面那条分层：共享模块不许 import `src/gate/`，网关不许 import `sdk/`，`protocol/` 保持零依赖。目录划分靠测试维持，不靠 review 记性。
@@ -404,7 +492,6 @@ npm run load -- --clients 150 --rate 6 --seconds 10 --codec pb   --admin http://
 ```
 proto/             protobuf schema（gate.proto，信封定义）
 src/
-  index.ts         进程入口：起 Gate、装信号处理
   framework/       ── 服务器公共代码（基础层）───────────
     index.ts       后端服务需要的出口（ServiceNode / ErrorCode / logger）
     serviceNode.ts 后端服务接入：注册 handler、推送、组播、踢人
@@ -414,7 +501,9 @@ src/
     nats/          NATS 传输：连接管理、subject 命名、两个方向的 bus
     redis/         状态层（会话注册表 Lua、节点注册表）+ Redis pub/sub 传输
     util/          日志、id、限流
-  gate/            ── 网关：基于 framework 的一个服务 ────
+    admin/         Metrics + 健康探针/管理 HTTP 服务（两种节点共用）
+  gate/            ── 网关：基于 framework 的边缘服务 ────
+    main.ts        进程入口
     index.ts       对外出口（Gate、loadConfig）
     gate.ts        编排：把下面这些接起来，处理每一个包
     config.ts      环境变量 → 配置
@@ -422,7 +511,15 @@ src/
     net/           WebSocket 接入层、连接对象（保活/背压/限流）
     session/       会话对象、重放缓冲、会话管理器（登录/重连/顶号/停机）
     router/        路由表、后端客户端（粘性绑定/超时跟踪）
-    metrics/       计数器、管理与探针 HTTP 服务
+  game/            ── 业务节点：基于 framework ────────────
+    main.ts        进程入口：只做系统注册
+    gameNode.ts    编排 + 命令路由到系统
+    system.ts      GameSystem 基类、上下文、注册表/路由
+    player.ts      玩家对象：状态切片 + 串行邮箱 + 标脏
+    playerManager.ts 加载/落盘/卸载 + 所有权租约
+    events.ts      系统间事件总线
+    store.ts       PlayerStore 接口 + redis/memory 实现
+    systems/       业务系统：profile、bag、quest（示例）
   client/          ── 客户端 SDK（不是服务器代码）────────
     gateClient.ts  自动重连 + 断点续传的参考实现
 tools/             token 签发、模拟后端、冒烟客户端、压测、proto 代码生成
@@ -433,15 +530,15 @@ deploy/            nginx 配置
 三层，依赖方向单向向内：
 
 ```
-    client/                gate/            （将来的 game/ chat/…）
-       │                     │                        │
-       └──── protocol only ──┴────────┬───────────────┘
-                                      ▼
-                                 framework/
+    client/            gate/        game/        （将来的 chat/ rank/…）
+       │                 │            │                    │
+       └─ protocol only ─┴────────────┴────────┬───────────┘
+                                               ▼
+                                          framework/
 ```
 
-- **`framework/`** 是基础层，不知道谁在用它 —— 所以 `game` / `chat` 服务可以直接长在上面，只写 handler，不用抄一遍 gate 的连接管理、注册表、心跳。
-- **`gate/`** 就是基于 framework 的一个服务，它不 import `framework/serviceNode`（网关不是后端服务），也不 import `client/`。
+- **`framework/`** 是基础层，不知道谁在用它 —— `game` 就是长在上面的：它只写业务系统，连接管理、节点注册、心跳、请求响应全部复用。再加 `chat` / `rank` 也是同样的做法。
+- **`gate/`** 和 **`game/`** 都是基于 framework 的服务，**互不 import** —— 它们只通过总线通信，所以能独立扩容和部署。gate 不 import `framework/serviceNode`（网关不是后端服务）。
 - **`client/`** 只依赖 `framework/protocol/` —— 一行 redis 代码都不许碰，否则 SDK 就没法在浏览器/游戏引擎里用了。
 
 这三条不靠 review 记性维持，[test/unit/moduleBoundaries.test.ts](test/unit/moduleBoundaries.test.ts) 会盯着。

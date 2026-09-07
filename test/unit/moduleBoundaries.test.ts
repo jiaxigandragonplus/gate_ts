@@ -1,9 +1,10 @@
 /**
- * Guards the layering that src/framework, src/gate and src/client exist to
- * express:
+ * Guards the layering that src/framework, src/gate, src/game and src/client
+ * exist to express:
  *
  *   framework/   base layer - knows nothing about who builds on it
- *   gate/        one service built on the framework
+ *   gate/        the edge service, built on the framework
+ *   game/        the business-logic service, built on the framework
  *   client/      the client SDK; must stay usable outside node
  *
  * The dangerous direction is inward-to-outward (framework reaching into gate)
@@ -54,8 +55,34 @@ describe('module boundaries', () => {
   it('the framework does not depend on anything built on it', () => {
     // A backend service importing the framework must not drag in the gateway.
     expect(
-      violations('framework', (t) => !t.startsWith('gate') && !t.startsWith('client')),
+      violations(
+        'framework',
+        (t) => !t.startsWith('gate') && !t.startsWith('client') && !t.startsWith('game'),
+      ),
     ).toEqual([]);
+  });
+
+  it('the services do not depend on each other', () => {
+    // gate and game talk over the wire, never by importing each other: that
+    // is what lets them scale and deploy independently.
+    expect(violations('gate', (t) => !t.startsWith('game'))).toEqual([]);
+    expect(violations('game', (t) => !t.startsWith('gate') && !t.startsWith('client'))).toEqual(
+      [],
+    );
+  });
+
+  it('the game node builds on the framework, not on its own copy of it', () => {
+    // Every non-local import in game/ must resolve into the framework.
+    const outside = new Set<string>();
+    for (const file of tsFiles(join(SRC, 'game'))) {
+      for (const target of localImports(file)) {
+        if (!target.startsWith('game/')) outside.add(target.split('/').slice(0, 2).join('/'));
+      }
+    }
+    for (const target of outside) {
+      expect(target.startsWith('framework/')).toBe(true);
+    }
+    expect(outside.size).toBeGreaterThan(0);
   });
 
   it('the client SDK depends on the protocol only', () => {
@@ -84,6 +111,7 @@ describe('module boundaries', () => {
     // A silent glob failure would make every assertion above vacuous.
     expect(tsFiles(join(SRC, 'gate')).length).toBeGreaterThan(10);
     expect(tsFiles(join(SRC, 'framework')).length).toBeGreaterThan(10);
+    expect(tsFiles(join(SRC, 'game')).length).toBeGreaterThan(5);
     expect(tsFiles(join(SRC, 'client')).length).toBeGreaterThan(0);
     expect(localImports(join(SRC, 'gate', 'gate.ts'))).toContain('framework/protocol/packet');
     expect(localImports(join(SRC, 'client', 'gateClient.ts'))).toContain(

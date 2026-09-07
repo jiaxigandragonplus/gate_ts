@@ -11,8 +11,7 @@ import { SessionManager } from './session/sessionManager';
 import type { Session } from './session/session';
 import { WsServer } from './net/wsServer';
 import type { Connection } from './net/connection';
-import { Metrics } from './metrics/metrics';
-import { AdminServer } from './metrics/adminServer';
+import { Metrics, AdminServer } from '../framework/admin';
 import {
   CloseCode,
   ErrorCode,

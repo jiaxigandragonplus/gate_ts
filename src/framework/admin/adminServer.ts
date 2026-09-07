@@ -19,6 +19,7 @@ export interface AdminHandlers {
 export interface AdminServerOptions {
   host: string;
   port: number;
+  /** Node id, reported by /healthz. */
   gateId: string;
   /** When set, mutating endpoints require `Authorization: Bearer <token>`. */
   token?: string;

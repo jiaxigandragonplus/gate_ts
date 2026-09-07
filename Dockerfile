@@ -22,4 +22,4 @@ EXPOSE 7000 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.ADMIN_PORT||8000)+'/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
-CMD ["node", "dist/src/index.js"]
+CMD ["node", "dist/src/gate/main.js"]

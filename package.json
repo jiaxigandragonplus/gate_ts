@@ -3,26 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "description": "Horizontally scalable WebSocket gateway (gate) server for game backends",
-  "main": "dist/src/index.js",
+  "main": "dist/src/gate/main.js",
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "start": "node dist/src/index.js",
-    "dev": "tsx watch src/index.ts",
+    "start": "node dist/src/gate/main.js",
+    "dev": "tsx watch src/gate/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "mock:game": "tsx tools/mockBackend.ts --service game",
     "mock:chat": "tsx tools/mockBackend.ts --service chat",
     "client": "tsx tools/testClient.ts",
     "token": "tsx tools/genToken.ts",
-    "start:mock:game": "node dist/tools/mockBackend.js --service game",
     "start:mock:chat": "node dist/tools/mockBackend.js --service chat",
     "load": "tsx tools/loadTest.ts",
     "proto:gen": "tsx tools/genProto.ts",
-    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "start:game": "node dist/src/game/main.js",
+    "dev:game": "tsx watch src/game/main.ts"
   },
   "dependencies": {
     "@nats-io/transport-node": "^3.4.0",

@@ -67,6 +67,7 @@ services:
       - "7002:7000"
       - "8002:8000"
 
+  # The real business-logic node: systems live here (see src/game/systems).
   game:
     build: .
     depends_on:
@@ -74,15 +75,20 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
-    command: ["node", "dist/tools/mockBackend.js", "--service", "game"]
+    command: ["node", "dist/src/game/main.js"]
     environment:
       REDIS_URL: redis://redis:6379
       CLUSTER_TRANSPORT: nats
       NATS_SERVERS: nats://nats:4222
+      GAME_ADMIN_HOST: 0.0.0.0
       LOG_LEVEL: info
-    # Backend services have no HTTP port; the image's probe does not apply.
+    ports:
+      - "9001:9000"
     healthcheck:
-      disable: true
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:9000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   chat:
     build: .

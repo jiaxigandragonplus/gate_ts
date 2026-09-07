@@ -4,6 +4,7 @@ import type { GateConfig } from '../../src/gate/config';
 import type { RouteRule } from '../../src/gate/router/routeTable';
 import type { CodecName } from '../../src/framework/protocol/codec';
 import type { TransportKind } from '../../src/framework/transport/types';
+import type { GameConfig } from '../../src/game/config';
 
 export const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
 export const NATS_URL = process.env.TEST_NATS_URL ?? 'nats://127.0.0.1:4222';
@@ -168,3 +169,42 @@ export function waitFor<T = unknown>(
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// --------------------------------------------------------------- game ----
+
+export interface TestGameOptions {
+  nodeId: string;
+  keyPrefix: string;
+  adminPort: number;
+  transport?: TransportKind;
+  unloadDelayMs?: number;
+  saveIntervalMs?: number;
+  mailboxLimit?: number;
+  leaseTtlMs?: number;
+  tickIntervalMs?: number;
+}
+
+export function testGameConfig(o: TestGameOptions): GameConfig {
+  return {
+    service: 'game',
+    nodeId: o.nodeId,
+    redis: { url: REDIS_URL, keyPrefix: o.keyPrefix },
+    cluster: {
+      transport: o.transport ?? 'redis',
+      heartbeatMs: 60_000,
+      nodeTtlMs: 30_000,
+    },
+    nats: { servers: [NATS_URL], subjectPrefix: o.keyPrefix },
+    player: {
+      unloadDelayMs: o.unloadDelayMs ?? 60_000,
+      saveIntervalMs: o.saveIntervalMs ?? 60_000,
+      mailboxLimit: o.mailboxLimit ?? 64,
+      slowHandlerMs: 10_000,
+      leaseTtlMs: o.leaseTtlMs ?? 60_000,
+    },
+    tickIntervalMs: o.tickIntervalMs ?? 0,
+    store: { kind: 'memory' },
+    admin: { host: '127.0.0.1', port: o.adminPort },
+    shutdownGraceMs: 1_000,
+  };
+}
